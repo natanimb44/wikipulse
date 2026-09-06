@@ -1,55 +1,34 @@
-# Project: WikiPulse — Real-Time Wikipedia Edit Anomaly Detector
+# WikiPulse: how I designed this
 
-## 1. Vision
+## Why I built this
 
-Build a production-grade, real-time streaming data pipeline that ingests Wikipedia's
-live global edit feed, computes windowed statistics per page and per editor using
-distributed stream processing, and flags anomalous edit behavior (vandalism spikes,
-bot bursts, coordinated editing, edit wars) as it happens — surfaced on a live
-public dashboard.
+I wanted a portfolio project that actually proves I can work with real time data, not just another CRUD app or a notebook full of pandas. So the goal here was to ingest Wikipedia's live edit stream, run it through some actual distributed stream processing, and flag suspicious edit behavior (vandalism spikes, bot bursts, coordinated editing, edit wars) as it's happening, live, on a public dashboard.
 
-This is a portfolio project targeting Big Tech / Big Data engineering roles
-(ML Engineer, Data Engineer, Backend/Distributed Systems). The point of the
-project is to demonstrate real competence with:
-- Event streaming (Kafka-protocol pub/sub)
-- Distributed stream processing with windowed aggregation (Spark Structured Streaming)
-- Time-series storage at scale
-- Statistical anomaly detection on streaming data
-- A deployed, live, end-to-end system (not just a notebook)
+Basically I wanted something close to a scaled down version of the abuse detection systems that platforms like Meta, Reddit, or TikTok run internally. I care more about having a real, working, end to end pipeline than about the anomaly detection being fancy. A dumb z-score check running on live data beats a sophisticated model that only works on a static CSV I downloaded once.
 
-The narrative to build toward: "I built a scaled-down version of the kind of
-real-time trust & safety / platform integrity system that Meta, Reddit, or
-TikTok run to detect abuse as it happens."
+## The data
 
-Prioritize correctness and a genuinely working end-to-end pipeline over
-model sophistication. A simple z-score anomaly detector running on a real,
-live, distributed pipeline is more impressive than a fancy model that only
-runs on a static CSV.
-
-## 2. Data Source
-
-Wikipedia publishes every edit across all language editions in real time via
-Server-Sent Events (SSE), no authentication required:
+Wikipedia streams every single edit across every language edition, live, with no auth needed:
 
 - Endpoint: `https://stream.wikimedia.org/v2/stream/recentchange`
-- Protocol: SSE (`text/event-stream`), one JSON object per edit event
-- Volume: typically several hundred to a few thousand events per minute globally
-- Docs: https://wikitech.wikimedia.org/wiki/Event_Platform/EventStreams
+- It's server sent events (SSE), one JSON object per edit
+- Volume is usually a few hundred to a couple thousand events a minute globally
+- Docs are here if you want to dig in: https://wikitech.wikimedia.org/wiki/Event_Platform/EventStreams
 
-Each event JSON includes (field names approximate — verify against live stream):
+Fields I care about from each event (I double checked these against the live stream since the docs are a little loose):
 - `title` (page title)
-- `user` (username or IP string)
-- `bot` (boolean — self-reported bot flag)
-- `anon` / whether `user` looks like an IP address (used as anonymous-edit proxy)
-- `timestamp` (unix epoch seconds)
-- `type` (edit / new / log / categorize — filter to `edit` and `new` only)
-- `wiki` (which wiki, e.g. `enwiki` — filter to `enwiki` only for v1 to bound volume)
-- `length.old` / `length.new` (byte diff — compute `abs(new - old)`)
-- `revision.old` / `revision.new` (revision IDs)
-- `comment` (edit summary — reverts often contain "revert"/"undo" in this field)
-- `server_url`, `namespace` (filter to `namespace == 0`, i.e. main article namespace only, to reduce noise from talk/user pages)
+- `user` (username, or an IP if it's anonymous)
+- `bot` (self reported bot flag)
+- whether `user` looks like an IP, which I use as a stand in for "anonymous edit"
+- `timestamp`
+- `type` (I only keep `edit` and `new`, there's also log/categorize events I don't care about)
+- `wiki` (I filter to `enwiki` only for now to keep the volume manageable)
+- `length.old` / `length.new`, I take the absolute diff
+- `revision.old` / `revision.new`
+- `comment`, since reverts usually have "revert" or "undo" in the edit summary
+- `namespace`, filtered to `0` (main articles only) to cut out talk page and user page noise
 
-## 3. Architecture
+## Architecture
 
 ```
 [Wikipedia EventStreams SSE]
@@ -60,14 +39,14 @@ Each event JSON includes (field names approximate — verify against live stream
         v
 [Spark Structured Streaming Job]
    - reads from Redpanda (Kafka-compatible consumer)
-   - parses + filters events
-   - computes windowed aggregations (tumbling 1-min windows, watermark 2 min):
+   - parses and filters events
+   - windowed aggregations (tumbling 1-min windows, 2 min watermark):
        - edits_per_page
        - edits_per_editor
        - revert_count_per_page (comment contains "revert"/"undo")
        - anon_edit_ratio_per_page
-   - computes rolling baseline per page/editor (EWMA over prior windows)
-   - flags anomalies where current window >> baseline (z-score or ratio threshold)
+   - rolling baseline per page/editor (EWMA over prior windows)
+   - flags anomalies where the current window blows past the baseline
    - writes:
        a) windowed aggregates -> TimescaleDB `window_stats` table
        b) flagged anomalies -> TimescaleDB `anomalies` table
@@ -76,80 +55,39 @@ Each event JSON includes (field names approximate — verify against live stream
 [TimescaleDB (Postgres + timeseries extension)]
         |
         v
-[FastAPI backend] -- serves REST endpoints, reads from TimescaleDB
+[FastAPI backend] serving REST endpoints off TimescaleDB
         |
         v
-[React (or React Native/Expo, matching PropMetrics stack) dashboard]
-   - live anomaly feed (polling or WebSocket)
+[React dashboard]
+   - live anomaly feed
    - spike chart for a selected page
    - "hot right now" flagged pages list
 ```
 
-## 4. Tech Stack (all containerized via Docker Compose for local dev)
+## Stack
 
-- **Redpanda** (single-node, Kafka-API compatible) — message broker, replaces raw Kafka+Zookeeper to avoid ops overhead
-- **Apache Spark** (Structured Streaming, Python/PySpark) — stream processing
-- **TimescaleDB** (Postgres 15 + Timescale extension) — storage for windowed stats and anomalies
-- **FastAPI** (Python) — REST API layer, same stack as PropMetrics
-- **React** (or React Native/Expo web build, to reuse PropMetrics frontend patterns) — dashboard
-- **Docker Compose** — local orchestration of all services
-- **Deployment targets** (Phase 5, later): Railway for backend/Spark job, Vercel for frontend — same pattern as PropMetrics
+Everything's containerized with Docker Compose for local dev:
 
-## 5. Dev Environment
+- **Redpanda** (single node, speaks the Kafka API) as the message broker. I picked this over raw Kafka + Zookeeper mostly to avoid the ops headache.
+- **Apache Spark** (Structured Streaming, PySpark) for the stream processing.
+- **TimescaleDB** (Postgres 15 with the Timescale extension) to store windowed stats and anomalies.
+- **FastAPI** for the REST layer.
+- **React** (Vite) for the dashboard.
+- **Docker Compose** to run all of it locally.
+- Deployed later to Railway (backend/Spark) and Vercel (frontend).
 
-The developer does not have admin/install rights on their local machine, so
-all Docker-based work happens in **GitHub Codespaces**, not locally.
+## Dev setup
 
-- The project repo lives on GitHub; a Codespace is launched from it, which
-  boots a remote Linux VM with Docker, Node.js, Python, and git pre-installed
-  — no local installation of anything is required.
-- Development happens through the **VS Code desktop app** connected to the
-  Codespace via the GitHub Codespaces extension (or the browser-based VS Code
-  if the desktop app can't be installed either).
-- **Claude Code runs inside the Codespace terminal itself** (installed via
-  `npm install -g @anthropic-ai/claude-code`), so it has direct access to
-  run `docker compose`, inspect container logs, query TimescaleDB, and
-  iterate on the pipeline exactly as if it had a normal local dev machine —
-  because from its point of view, it does.
-- All `docker-compose up` / `docker compose` commands referenced throughout
-  this brief should be run from that Codespace terminal.
-- Ports (FastAPI, dashboard dev server, Spark UI, etc.) are auto-forwarded by
-  Codespaces and accessible via the **Ports** tab in VS Code.
-- Be mindful of Codespaces' free-tier monthly core-hour limit — stop the
-  Codespace when not actively working rather than leaving it running idle.
+I don't have admin rights on my own machine, so I did all of this in GitHub Codespaces instead of locally. The repo lives on GitHub, spinning up a Codespace gives me a full Linux VM with Docker, Node, Python, and git already set up, no local installs needed.
 
-## 6. Repo Structure
+I worked through the VS Code desktop app connected to the Codespace. All the `docker compose` commands in the README assume you're running them from inside that Codespace terminal. Ports get auto forwarded and show up under the Ports tab in VS Code.
 
-```
-wikipulse/
-├── docker-compose.yml
-├── README.md
-├── producer/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── producer.py          # SSE consumer -> Redpanda publisher
-├── spark-job/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── stream_processor.py  # Spark Structured Streaming job
-├── backend/
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   ├── main.py               # FastAPI app
-│   ├── models.py             # Pydantic + DB models
-│   └── db.py                 # TimescaleDB connection
-├── frontend/
-│   └── ...                   # React app (Vite) or Expo web
-├── db/
-│   └── init.sql              # TimescaleDB schema + hypertable setup
-└── scripts/
-    └── load_test.py          # measures throughput/latency for the README
-```
+One thing to watch out for: Codespaces free tier has a monthly core hour limit, so I made a habit of stopping the Codespace whenever I wasn't actively working instead of leaving it running.
 
-## 7. Database Schema (TimescaleDB)
+## Database schema
 
 ```sql
--- Raw-ish windowed stats (one row per page/editor per window)
+-- one row per page/editor per window
 CREATE TABLE window_stats (
     window_start TIMESTAMPTZ NOT NULL,
     window_end   TIMESTAMPTZ NOT NULL,
@@ -163,7 +101,7 @@ CREATE TABLE window_stats (
 );
 SELECT create_hypertable('window_stats', 'window_start');
 
--- Flagged anomalies
+-- flagged anomalies
 CREATE TABLE anomalies (
     id           BIGSERIAL PRIMARY KEY,
     detected_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -179,87 +117,47 @@ CREATE TABLE anomalies (
 SELECT create_hypertable('anomalies', 'detected_at');
 ```
 
-## 8. Anomaly Detection Logic (v1 — statistical, no ML model yet)
+## How the anomaly detection actually works
 
-For each entity (page or editor) and each 1-minute tumbling window:
-1. Maintain an EWMA baseline of edit_count with smoothing factor alpha (e.g. 0.3),
-   updated incrementally window-over-window, keyed by entity.
-2. Compute `z_score = (current_count - ewma_baseline) / rolling_stddev`
-   (rolling_stddev also maintained via an incremental/Welford-style update, or
-   approximate with a fixed lookback window if simpler to implement first).
-3. Flag as anomaly if `z_score > 3` (tune threshold empirically after observing
-   real traffic for a day).
-4. Bucket severity: z 3-4 = low, 4-6 = medium, 6+ = high.
-5. Separately flag `revert_count / edit_count > 0.5` within a window as an
-   "edit war" signal regardless of z-score, since revert ratio spikes are
-   meaningful even on already-high-traffic pages.
+Nothing fancy here, just statistics, no ML model (yet). For each page or editor, in every 1 minute tumbling window:
 
-State for baselines must be maintained across streaming batches — use Spark's
-`mapGroupsWithState` / `flatMapGroupsWithState` (or `applyInPandasWithState` in
-newer PySpark) keyed by entity_key, OR maintain baselines in an external store
-(simplest v1: read/write baseline state to/from TimescaleDB each batch via
-foreachBatch — slower but much simpler to implement correctly first).
+1. Keep an EWMA baseline of edit_count per entity, smoothing factor around 0.3, updated window over window.
+2. `z_score = (current_count - ewma_baseline) / rolling_stddev`, with the rolling stddev also updated incrementally (Welford style, or a simpler fixed lookback if that's easier to get right first).
+3. Flag it as an anomaly if `z_score > 3`. I plan to tune this threshold after watching real traffic for a day or so.
+4. Bucket severity: z of 3 to 4 is low, 4 to 6 is medium, 6+ is high.
+5. Separately, flag anything where `revert_count / edit_count > 0.5` in a window as an "edit war" regardless of z-score, since a high revert ratio matters even on pages that are already busy.
 
-**Build order recommendation for Claude Code**: implement the foreachBatch +
-TimescaleDB-read-baseline approach first (simpler, correct), then optimize to
-Spark stateful streaming (`mapGroupsWithState`) as a v2 if time allows — this
-progression itself is a good story for interviews ("started simple, then
-optimized for lower latency/state management").
+The baseline state has to persist across streaming batches. I went with reading and writing it to TimescaleDB each batch through `foreachBatch`, since Spark's native stateful streaming operators (`mapGroupsWithState` etc.) would've been faster but harder to get right on the first try. Started simple and correct, can optimize later.
 
-## 9. FastAPI Endpoints (v1)
+## API endpoints
 
-- `GET /anomalies/recent?limit=50` — most recent flagged anomalies, newest first
-- `GET /anomalies/severity/{level}` — filter by severity
-- `GET /stats/page/{title}?minutes=60` — windowed stats time series for one page
-- `GET /stats/global?minutes=60` — global edit-rate time series (for an overview chart)
-- `GET /health` — basic healthcheck (confirms DB connectivity)
+- `GET /anomalies/recent?limit=50`, most recent flagged anomalies
+- `GET /anomalies/severity/{level}`, filter by severity
+- `GET /stats/page/{title}?minutes=60`, time series for one page
+- `GET /stats/global?minutes=60`, global edit rate time series for the overview chart
+- `GET /health`, basic healthcheck
 
-## 10. Frontend (v1 dashboard)
+## Frontend
 
-- **Live anomaly feed**: auto-refreshing list (poll every 5-10s) of recent
-  flagged anomalies — page/editor name, metric, severity badge, time
-- **Spike chart**: click an anomaly to see a line chart of edit_count over
-  time for that page, with the baseline overlaid, so the spike is visually obvious
-- **Global activity chart**: total edits/minute across all of English Wikipedia,
-  as a "pulse" visualization
-- Reuse component/style patterns from PropMetrics where sensible for speed
+- A live anomaly feed that polls every 5 to 10 seconds
+- A spike chart, click an anomaly and see edit_count over time for that page with the baseline overlaid so the spike is obvious
+- A global "pulse" chart showing total edits per minute across English Wikipedia
 
-## 11. Build Phases & Acceptance Criteria
+## How I built it, phase by phase
 
-**Phase 1 — Ingestion**
-Done when: Redpanda topic `wiki-edits` shows a continuous live stream of
-JSON messages when inspected via `rpk topic consume wiki-edits` (Redpanda's
-CLI) or a simple Python consumer script.
+**Phase 1, ingestion.** Done when the `wiki-edits` Redpanda topic shows a continuous stream of JSON messages (checked this with `rpk topic consume wiki-edits`).
 
-**Phase 2 — Stream Processing**
-Done when: `window_stats` table in TimescaleDB is populated continuously
-with fresh rows every ~1 minute while the Spark job runs, for both `page`
-and `editor` entity types.
+**Phase 2, stream processing.** Done when `window_stats` fills up with fresh rows roughly every minute, for both pages and editors.
 
-**Phase 3 — Anomaly Detection**
-Done when: `anomalies` table populates with plausible flagged events during
-a real burst (test this by watching a currently-trending Wikipedia page, or
-by temporarily lowering the z-score threshold to force test flags).
+**Phase 3, anomaly detection.** Done when `anomalies` actually populates with reasonable looking flags during a real burst. I tested this by watching a page that was trending at the time, and also by temporarily lowering the z-score threshold to force some flags through.
 
-**Phase 4 — Serving + Dashboard**
-Done when: dashboard shows a live-updating anomaly feed and at least one
-working spike chart, running locally end-to-end via `docker-compose up`.
+**Phase 4, serving and dashboard.** Done when the dashboard shows a live updating feed and at least one working spike chart, all running locally through `docker-compose up`.
 
-**Phase 5 — Deployment + Polish**
-Done when: system is deployed (Railway backend/Spark, Vercel frontend) and
-publicly viewable at a URL, and README includes measured throughput/latency
-numbers from `scripts/load_test.py` plus an architecture diagram.
+**Phase 5, deployment.** Done when it's actually live somewhere public (Railway for the backend, Vercel for the frontend) and the README has real throughput and latency numbers from the load test script plus a diagram.
 
-## 12. Non-Goals (for v1 — explicitly defer to avoid scope creep)
+## What I deliberately skipped for v1
 
-- Multi-language wiki support (English Wikipedia only for v1)
-- ML-based anomaly detection (Isolation Forest etc.) — statistical z-score
-  approach is sufficient for v1 and should ship first
-- User authentication on the dashboard (public read-only is fine)
-- Historical backfill / replay of past edits — live stream only
-
-## 13. What to hand back for review
-
-After each phase, report: what was built, how it was verified (exact commands
-run and their output), any deviations from this spec and why, and what's
-blocking the next phase if anything.
+- Other language wikis, English only for now
+- Any ML based anomaly detection, statistics are good enough to start
+- Auth on the dashboard, it's public read only anyway
+- Historical backfill or replay, live stream only
