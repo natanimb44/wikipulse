@@ -1,0 +1,113 @@
+services:
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.18
+    container_name: redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=1G
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports:
+      - "9092:9092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redpanda-topic-init:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.18
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - "rpk topic create wiki-edits --brokers redpanda:9092 --partitions 3 --replicas 1
+         --topic-config retention.ms=900000 || true"
+
+  timescaledb:
+    image: timescale/timescaledb:2.15.3-pg15
+    container_name: timescaledb
+    environment:
+      POSTGRES_USER: wikipulse
+      POSTGRES_PASSWORD: wikipulse
+      POSTGRES_DB: wikipulse
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wikipulse -d wikipulse"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  producer:
+    build: ./producer
+    depends_on:
+      redpanda-topic-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      WIKI_EDITS_TOPIC: wiki-edits
+    restart: unless-stopped
+
+  spark-job:
+    build: ./spark-job
+    depends_on:
+      redpanda-topic-init:
+        condition: service_completed_successfully
+      timescaledb:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      WIKI_EDITS_TOPIC: wiki-edits
+      TIMESCALE_HOST: timescaledb
+      TIMESCALE_PORT: 5432
+      TIMESCALE_DB: wikipulse
+      TIMESCALE_USER: wikipulse
+      TIMESCALE_PASSWORD: wikipulse
+      EWMA_ALPHA: "0.3"
+      Z_THRESHOLD: "3.0"
+      REVERT_RATIO_THRESHOLD: "0.5"
+    ports:
+      - "4040:4040"
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      TIMESCALE_HOST: timescaledb
+      TIMESCALE_PORT: 5432
+      TIMESCALE_DB: wikipulse
+      TIMESCALE_USER: wikipulse
+      TIMESCALE_PASSWORD: wikipulse
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+
+volumes:
+  timescale_data:
+  frontend_node_modules:

@@ -1,0 +1,8 @@
+{
+  "name": "wikipulse-railway-iac",
+  "private": true,
+  "description": "Railway infrastructure-as-code tooling for .railway/railway.ts. Not part of the app itself — run `npm install` here before `railway config plan/apply`.",
+  "dependencies": {
+    "railway": "^3.11.0"
+  }
+}
