@@ -76,14 +76,6 @@ Everything's containerized with Docker Compose for local dev:
 - **Docker Compose** to run all of it locally.
 - Deployed later to Railway (backend/Spark) and Vercel (frontend).
 
-## Dev setup
-
-I don't have admin rights on my own machine, so I did all of this in GitHub Codespaces instead of locally. The repo lives on GitHub; spinning up a Codespace gives me a full Linux VM with Docker, Node, Python, and git already set up — no local installs needed.
-
-I worked through the VS Code desktop app connected to the Codespace. Every `docker compose` command in the README assumes you're running it from inside that Codespace terminal. Ports get auto-forwarded and show up under the Ports tab in VS Code.
-
-One thing worth knowing: Codespaces' free tier has a monthly core-hour limit, so I got in the habit of stopping the Codespace any time I wasn't actively working on it instead of leaving it running in the background.
-
 ## Database schema
 
 ```sql
@@ -138,7 +130,7 @@ SELECT add_retention_policy('anomalies', INTERVAL '3 days');
 
 ## How the anomaly detection actually works
 
-Nothing fancy, just statistics — no ML model, at least not yet. For each page or editor, in every 1-minute tumbling window:
+Nothing fancy, just statistics, no ML model, at least not yet. For each page or editor, in every 1-minute tumbling window:
 
 1. Keep an EWMA baseline of `edit_count` per entity, smoothing factor around 0.3, updated window over window.
 2. Track rolling variance for that same entity the same way (EWMA of squared deviation from the baseline, not a separate pass), and compute `z_score = (current_count - ewma_baseline) / max(sqrt(rolling_variance), 1.0)`. The floor on the denominator keeps a brand-new entity's z-score from blowing up before it has any real history.
@@ -175,10 +167,3 @@ The baseline state has to persist across streaming batches somehow. I went with 
 **Phase 4, serving and dashboard.** Done when the dashboard showed a live-updating feed and at least one working spike chart, all running locally through `docker-compose up`.
 
 **Phase 5, deployment.** Done when it was actually live somewhere public — Railway for the backend and pipeline, Vercel for the frontend.
-
-## What I deliberately skipped for v1
-
-- Other language wikis — English only for now
-- Any ML-based anomaly detection — plain statistics are good enough to start, and I'd rather get the pipeline right first
-- Auth on the dashboard — it's public and read-only anyway
-- Historical backfill or replay — live stream only, no way to go back and reprocess old data
