@@ -4,8 +4,7 @@ WikiPulse A real time anomaly detector for Wikipedia. It watches every edit happ
 
 I wanted real experience with streaming data and distributed processing in a similar way that abuse detection pipeline trust and safety teams at companies like Meta or Reddit would run but at a smaller scope.
 
-**Live demo:** https://wikipulse-six.vercel.app
-**API docs:** https://backend-production-1064.up.railway.app/docs
+**Live:** https://wikipulse-six.vercel.app
 
 `project_brief.md` is the longer writeup — why I made the design calls I made and what I'd do differently next time.
 
