@@ -83,7 +83,7 @@ def get_active_anomalies(
             WHERE detected_at >= now() - (%s || ' minutes')::interval
               AND (%s::text IS NULL OR severity = %s)
               AND (%s::text IS NULL OR entity_type = %s)
-            ORDER BY detected_at DESC
+            ORDER BY detected_at DESC, window_start DESC, id DESC
             LIMIT %s
             """,
             (minutes, severity, severity, entity_type, entity_type, limit),
@@ -222,11 +222,11 @@ def get_pipeline_health() -> dict[str, Any]:
         )
         latest = cur.fetchone()
         cur.execute(
-            """
+            f"""
             SELECT coalesce(sum(edit_count), 0)::int AS edits_last_5m,
                    count(DISTINCT entity_key)::int AS pages_last_5m
             FROM window_stats
-            WHERE entity_type = 'page' AND window_start >= now() - interval '5 minutes'
+            WHERE entity_type = 'page' AND window_start >= {LATEST_WINDOW} - interval '5 minutes'
             """
         )
         volume = cur.fetchone()

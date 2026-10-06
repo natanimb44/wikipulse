@@ -54,7 +54,7 @@ def recent_anomalies(limit: int = 50):
             SELECT id, detected_at, window_start, entity_type, entity_key,
                    metric, value, baseline, z_score, severity
             FROM anomalies
-            ORDER BY detected_at DESC
+            ORDER BY detected_at DESC, window_start DESC, id DESC
             LIMIT %s
             """,
             (limit,),
@@ -74,7 +74,7 @@ def anomalies_by_severity(level: str, limit: int = 50):
                    metric, value, baseline, z_score, severity
             FROM anomalies
             WHERE severity = %s
-            ORDER BY detected_at DESC
+            ORDER BY detected_at DESC, window_start DESC, id DESC
             LIMIT %s
             """,
             (level, limit),
