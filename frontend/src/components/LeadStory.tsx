@@ -72,7 +72,7 @@ export function LeadStory({
       <section className="lead-story">
         <p className="lead-eyebrow">Standby</p>
         <h2 className="lead-headline">Watching the feed</h2>
-        <p className="lead-dek">No anomalies detected yet this session. The global pulse below is still live.</p>
+        <p className="lead-dek">No anomalies flagged yet. The pipeline checks for new edits every 15 minutes.</p>
       </section>
     )
   }

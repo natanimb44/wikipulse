@@ -212,7 +212,7 @@ def main():
         .withColumn("event_time", to_timestamp(from_unixtime(col("timestamp"))))
         .withColumn(
             "is_revert",
-            lower(col("comment")).rlike("revert|undo"),
+            lower(col("comment")).rlike("revert|undo|undid"),
         )
     )
 

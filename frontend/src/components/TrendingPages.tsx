@@ -1,7 +1,7 @@
 import { api, wikiPageUrl, type TrendingPage } from '../api'
 import { usePolling } from '../hooks/usePolling'
 
-const POLL_INTERVAL_MS = 15000
+const POLL_INTERVAL_MS = 60000
 
 export function TrendingPages() {
   const { data: pages, error } = usePolling(() => api.trendingPages(10, 8), POLL_INTERVAL_MS)

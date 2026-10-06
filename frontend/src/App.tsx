@@ -20,8 +20,8 @@ const DATELINE = new Date().toLocaleDateString('en-US', {
 function App() {
   const [pinned, setPinned] = useState<Anomaly | null>(null)
 
-  const { data: stats, error: statsError } = usePolling(() => api.globalStats(60), 10000)
-  const { data: anomalies, error: anomaliesError } = usePolling(() => api.recentAnomalies(50), 7000)
+  const { data: stats, error: statsError } = usePolling(() => api.globalStats(60), 60000)
+  const { data: anomalies, error: anomaliesError } = usePolling(() => api.recentAnomalies(50), 60000)
 
   const lead = pinned ?? pickLead(anomalies)
   const briefs = useMemo(() => (anomalies ?? []).filter((a) => a.id !== lead?.id), [anomalies, lead])
@@ -45,11 +45,11 @@ function App() {
         <h1 className="brand">WikiPulse</h1>
       </div>
       <div className="masthead-meta">
-        <span>Real-time edit-anomaly monitor &middot; en.wikipedia.org</span>
+        <span>Edit-anomaly monitor &middot; en.wikipedia.org</span>
         <span>{DATELINE}</span>
         <span className="live-indicator">
           <span className="live-dot" />
-          Live
+          Updated every 15 min
         </span>
       </div>
       <div className="rule-heavy" />

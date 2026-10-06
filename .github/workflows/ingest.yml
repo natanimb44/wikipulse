@@ -1,0 +1,42 @@
+name: ingest
+
+# Runs the batch pipeline every 15 minutes. Free on a public repo.
+# GitHub cron is best-effort, so runs can start a few minutes late; the job
+# picks up from wherever the last run stopped, so nothing gets skipped.
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+# Never let two runs overlap (the job also takes a DB lock as a backstop)
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+permissions:
+  actions: write  # for the keepalive step below
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: batch/requirements.txt
+      - run: pip install -r batch/requirements.txt
+      - run: python batch/ingest.py
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      # GitHub disables scheduled workflows on public repos after 60 days with
+      # no commits. Re-enabling it through the API resets that clock.
+      - name: Keep schedule alive
+        if: github.event_name == 'schedule'
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/ingest.yml/enable"
+        env:
+          GH_TOKEN: ${{ github.token }}
