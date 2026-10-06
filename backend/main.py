@@ -1,10 +1,33 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from mcp.server.transport_security import TransportSecuritySettings
 
-from db import get_cursor, healthcheck
+from db import LATEST_WINDOW, get_cursor, healthcheck
+from mcp_guard import MCPGuard
+from mcp_server import mcp
 from models import Anomaly, GlobalStat, TrendingPage, WindowStat
 
-app = FastAPI(title="WikiPulse API")
+# Stateless + plain JSON responses: every tool here is a one-shot read, so there's
+# no session state worth keeping, and it survives backend restarts on Railway.
+# DNS rebinding protection is for servers bound to localhost; this one is public
+# behind Railway's proxy and protected by the API key in MCPGuard instead.
+mcp_app = mcp.streamable_http_app(
+    stateless_http=True,
+    json_response=True,
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Mounted sub-apps don't get their own lifespan run, so start the MCP session manager here
+    async with mcp.session_manager.run():
+        yield
+
+
+app = FastAPI(title="WikiPulse API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,13 +86,13 @@ def _entity_stats(entity_type: str, entity_key: str, minutes: int) -> list[dict]
     minutes = max(1, min(minutes, 1440))
     with get_cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT window_start, window_end, entity_type, entity_key,
                    edit_count, revert_count, anon_ratio, baseline_ewma, z_score
             FROM window_stats
             WHERE entity_type = %s
               AND entity_key = %s
-              AND window_start >= now() - (%s || ' minutes')::interval
+              AND window_start >= {LATEST_WINDOW} - (%s || ' minutes')::interval
             ORDER BY window_start ASC
             """,
             (entity_type, entity_key, minutes),
@@ -92,11 +115,11 @@ def global_stats(minutes: int = 60):
     minutes = max(1, min(minutes, 1440))
     with get_cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT window_start, SUM(edit_count) AS edit_count
             FROM window_stats
             WHERE entity_type = 'page'
-              AND window_start >= now() - (%s || ' minutes')::interval
+              AND window_start >= {LATEST_WINDOW} - (%s || ' minutes')::interval
             GROUP BY window_start
             ORDER BY window_start ASC
             """,
@@ -111,14 +134,14 @@ def trending_pages(minutes: int = 10, limit: int = 8):
     limit = max(1, min(limit, 50))
     with get_cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT entity_key,
                    SUM(edit_count)::int AS edit_count,
                    SUM(revert_count)::int AS revert_count,
                    AVG(anon_ratio) AS anon_ratio
             FROM window_stats
             WHERE entity_type = 'page'
-              AND window_start >= now() - (%s || ' minutes')::interval
+              AND window_start >= {LATEST_WINDOW} - (%s || ' minutes')::interval
             GROUP BY entity_key
             ORDER BY edit_count DESC
             LIMIT %s
@@ -126,3 +149,7 @@ def trending_pages(minutes: int = 10, limit: int = 8):
             (minutes, limit),
         )
         return cur.fetchall()
+
+
+# Mounted last so the REST routes above match first; this only serves /mcp
+app.mount("/", MCPGuard(mcp_app))
