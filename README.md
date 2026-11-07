@@ -8,7 +8,7 @@ This repo is a showcase only: architecture, numbers, and methodology, with no so
 
 ## Why I built it
 
-I wanted real experience with streaming data and distributed processing, not another notebook that only ever ran once on a CSV I downloaded. Trust and safety teams at companies like Meta or Reddit run abuse-detection pipelines on live platform activity, and I wanted to build a small, one-person version of that against data that is genuinely live. Wikipedia was a good fit because every edit is public and arrives in real time, and because "unusual" depends heavily on context. Ten edits in a minute is normal for a page about breaking news but alarming for an obscure article, so a single global threshold would either miss most problems or flag everything. That is the main reason every page and editor gets its own baseline.
+I wanted to expand my experience experience with streaming data and distributed processing. Trust and safety teams at companies like Meta or Reddit run abuse-detection pipelines on live platform activity, and I wanted to build a small, one-person version of that against data that is genuinely live. Wikipedia was a good fit because every edit is public and arrives in real time, and because "unusual" depends heavily on context. Ten edits in a minute is normal for a page about breaking news but alarming for an obscure article, so a single global threshold would either miss most problems or flag everything. That is the main reason every page and editor gets its own baseline.
 
 ## Architecture
 
